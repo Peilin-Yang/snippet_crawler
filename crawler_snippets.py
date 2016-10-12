@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import sys,os
 import re
 import urllib
@@ -50,11 +51,11 @@ class BingSearchAPI():
         for key,value in params.iteritems():
             request += '&' + key + '=' + str(value) 
         request = self.bing_api + self.replace_symbols(request)
-        print request
+        #print request
         return requests.get(request, auth=(self.key, self.key))
 
     def search_next(self, url):
-        print url
+        #print url
         return requests.get(url, auth=(self.key, self.key))
 
 
@@ -83,6 +84,7 @@ class snippets_crawler():
             if response.status_code == 403:
                 print '403 ' + url
                 sys.exit()
+            time.sleep(1)
             return response.url,response.text
         except:
             print 'Error: ' + url
@@ -95,8 +97,7 @@ class snippets_crawler():
         
         if page.find('div', id='ires'):
             #results_cnt = int(page.find(id='sortBy').find('span', 'sortRight').span.string.split()[-2])
-            list_results = page.find('div', id='ires').find_all('li', 'g')
-            
+            list_results = page.find('div', id='ires').find_all('div', 'g')            
             for l in list_results:
                 if l.find('h3', 'r'):
                     href = l.find('h3', 'r').a['href']
@@ -110,22 +111,21 @@ class snippets_crawler():
                             href_link = d.split('=')[1]
                             if len(href_link) > 0:
                                 url = href_link
-                                if url not in self.url_list:
-                                    self.url_list.append(url)
-                                    if l.find('span', 'st'):
-                                        snippets = l.find('span', 'st').get_text()
-                                    else:
-                                        snippets = u''
+                                #if url not in self.url_list:
+                                self.url_list.append(url)
+                                if l.find('span', 'st'):
+                                    snippets = l.find('span', 'st').get_text()
+                                else:
+                                    snippets = u''
 
-                                    self.results.append({'id':self.query_id+'_google_'+str(self.crawl_idx), 'url':url, 'snippets':snippets})
-                    
-                                    self.crawl_idx += 1
-                                    #print self.pages_cnt,self.max_pages
-                                    if self.crawl_idx > self.results_limit:
-                                        self.crawl_idx = 1
-                                        return                                
-
+                                self.results.append({'id':self.query_id+'_google_'+str(self.crawl_idx), 'url':url, 'snippets':snippets})
                 
+                                self.crawl_idx += 1
+                                #print self.pages_cnt,self.max_pages
+                                if self.crawl_idx > self.results_limit:
+                                    self.crawl_idx = 1
+                                    return                                
+
             if page.find('table', id='nav'):
                 page_index = page.find('table', id='nav').find_all('td')
                 
@@ -263,6 +263,8 @@ class snippets_crawler():
         self.results = []
         self.url_list = []
 
+        print 'crawling Bing data...'
+
         json_results = bing.search(query_string,params).json()
         self.handle_bing_results(json_results, my_key)
 
@@ -273,7 +275,7 @@ class snippets_crawler():
     def start_crawl(self):
         print 'Query:' + self.query
         self.google_crawl()
-        self.yahoo_crawl()
+        #self.yahoo_crawl()
         self.bing_crawl()
 
 
