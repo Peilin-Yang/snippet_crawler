@@ -1,98 +1,59 @@
 # -*- coding: utf-8 -*-
+from __future__ import print_function
 import sys,os
-import re
-import urllib
-import urllib2
+import logging
 import codecs
 import time
-import math
 import string
-from datetime import date, timedelta, datetime
 from bs4 import BeautifulSoup
 import json
-import smtplib
-from email.mime.text import MIMEText
 import requests
+import argparse
 
 reload(sys)
 sys.setdefaultencoding('utf-8')
 
-
-
-
-class BingSearchAPI():
-    bing_api = "https://api.datamarket.azure.com/Bing/Search/Web?$format=json"
-    def __init__(self, key):
-        self.key = key
-
-    def replace_symbols(self, request):
-        # Custom urlencoder.
-        # They specifically want %27 as the quotation which is a single quote '
-        # We're going to map both ' and " to %27 to make it more python-esque
-        request = string.replace(request, "'", '%27')
-        request = string.replace(request, '"', '%27')
-        request = string.replace(request, '+', '%2b')
-        request = string.replace(request, ' ', '%20')
-        request = string.replace(request, ':', '%3a')
-        return request
-        
-    def search(self, query, params):
-        ''' This function expects a dictionary of query parameters and values.
-            Sources and Query are mandatory fields. 
-            Sources is required to be the first parameter.
-            Both Sources and Query requires single quotes surrounding it.
-            All parameters are case sensitive. Go figure.
-
-            For the Bing Search API schema, go to http://www.bing.com/developers/
-            Click on Bing Search API. Then download the Bing API Schema Guide
-            (which is oddly a word document file...pretty lame for a web api doc)
-        '''
-        request = '&Query="'  + str(query) + '"'
-        for key,value in params.iteritems():
-            request += '&' + key + '=' + str(value) 
-        request = self.bing_api + self.replace_symbols(request)
-        #print request
-        return requests.get(request, auth=(self.key, self.key))
-
-    def search_next(self, url):
-        #print url
-        return requests.get(url, auth=(self.key, self.key))
-
+# create logger with 'spam_application'
+logger = logging.getLogger('snippet crawler')
+logger.setLevel(logging.DEBUG)
+# create console handler with a higher log level
+ch = logging.StreamHandler()
+ch.setLevel(logging.INFO)
+# create formatter and add it to the handlers
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+ch.setFormatter(formatter)
+# add the handlers to the logger
+logger.addHandler(ch)
 
 
 class snippets_crawler():
-    def __init__(self, query_id, query):
-        self.query_id = query_id
-        self.query = query
-        self.results_limit = 100
-        self.pages_cnt = 1
-        self.crawl_idx = 1
-        self.url_base = ''
-        self.parameters = {}
-        self.url_list = []
-        self.results = []
-        self.output_root = os.path.join('./snippets/', str(query_id))
+    def __init__(self, crawl_google, crawl_yahoo, crawl_bing, limit, output_root):
+        self.crawl_google = crawl_google
+        self.crawl_yahoo = crawl_yahoo
+        self.crawl_bing = crawl_bing
+        self.results_limit = limit
+        self.url_list = set()
+        self.output_root = output_root
         
         if not os.path.exists(self.output_root):
-            os.makedirs(self.output_root)                
-
+            os.makedirs(self.output_root)
         
-    def get_page(self,url,para=None):
+    def get_page(self, url, para=None):
         try:
             response = requests.get(url, params=para)
+            logger.info('Got URL:' + response.url)
             response.encoding = 'utf-8'
             if response.status_code == 403:
-                print '403 ' + url
+                logger.warn('403 ' + url)
                 sys.exit()
             time.sleep(1)
-            return response.url,response.text
+            return response.url, response.text
         except:
-            print 'Error: ' + url
+            logger.error('Error: ' + url)
             return 'ERROR','ERROR'                  
 
             
-            
-    def google_get_search_results(self, url, content):
+    def google_get_search_results(self, query_id, url, content, pages_cnt, crawl_idx, results):
         page = BeautifulSoup(content, 'lxml')
         
         if page.find('div', id='ires'):
@@ -100,188 +61,183 @@ class snippets_crawler():
             list_results = page.find('div', id='ires').find_all('div', 'g')            
             for l in list_results:
                 if l.find('h3', 'r'):
-                    href = l.find('h3', 'r').a['href']
-                    #print href
-                    decoder = href.split('?')[1].split('&')
-                    #print decoder
-                    href_link = ''
-                    for d in decoder:
-                        #print d
-                        if d.split('=')[0] == 'q':
-                            href_link = d.split('=')[1]
-                            if len(href_link) > 0:
-                                url = href_link
-                                #if url not in self.url_list:
-                                self.url_list.append(url)
-                                if l.find('span', 'st'):
-                                    snippets = l.find('span', 'st').get_text()
-                                else:
-                                    snippets = u''
-
-                                self.results.append({'id':self.query_id+'_google_'+str(self.crawl_idx), 'url':url, 'snippets':snippets})
-                
-                                self.crawl_idx += 1
-                                #print self.pages_cnt,self.max_pages
-                                if self.crawl_idx > self.results_limit:
-                                    self.crawl_idx = 1
-                                    return                                
+                    try:
+                        href = l.find('h3', 'r').a['href']
+                        k,v = href.split('?')[1].split('&')[0].split('=')
+                        if k == 'q' and ('http' in v or 'https' in v):
+                            url = v
+                    except:
+                        url = ''
+                    # if url in self.url_list:
+                    #     continue
+                    if l.find('span', 'st'):
+                        snippets = l.find('span', 'st').get_text()
+                    else:
+                        snippets = u''
+                    if len(url) > 0 or len(snippets) > 0:
+                        self.url_list.add(url)
+                        results.append({'id': url, 'contents': snippets})
+                        crawl_idx += 1
+                        #print self.pages_cnt,self.max_pages
+                        if crawl_idx > self.results_limit:
+                            return
 
             if page.find('table', id='nav'):
                 page_index = page.find('table', id='nav').find_all('td')
-                
-                #for ele in page_index:
-                    #print ele
-                       
                 for i in range(len(page_index)):
                     if not page_index[i].find('a'):
-                        if self.pages_cnt == 1:
+                        if pages_cnt == 1:
                             next_page = page_index[i+2]
                         else:
                             next_page = page_index[i+1]
-                        
                         if next_page.find('a'):
                             next_url = 'https://www.google.com'+next_page.a['href']
-                            self.pages_cnt += 1                    
+                            pages_cnt += 1                    
                             next_url, next_content = self.get_page(next_url)
-                            self.google_get_search_results(next_url, next_content)
+                            self.google_get_search_results(query_id, next_url, next_content, pages_cnt, crawl_idx, results)
                         else:
                             return
                         break
 
 
-    def google_crawl(self):
-        self.url_base = 'https://www.google.com/search?'
-        self.parameters = {}
-        self.parameters['q'] = self.query
-        self.parameters['hl'] = 'en'
-
-        self.pages_cnt = 1
-        self.crawl_idx = 1
-        self.results = []
-        self.url_list = []
+    def google_crawl(self, qid, query_text):
+        url_base = 'https://www.google.com/search?'
+        parameters = {'q': query_text, 'hl': 'en'}
+        pages_cnt = 1
+        crawl_idx = 1
+        results = []
         
-        final_url, content = self.get_page(self.url_base, self.parameters)
+        final_url, content = self.get_page(url_base, parameters)
         
-        with codecs.open('./google_test', 'wb', 'utf-8') as out:
+        with codecs.open('google_test.html', 'w', 'utf-8') as out:
             out.write(content)
         
-        print 'crawling Google data...'
+        logger.info('crawling Google data...')
         
-        self.google_get_search_results(final_url, content)
-        with codecs.open(os.path.join(self.output_root, 'google.json'), 'wb', 'utf-8') as f:
-            json.dump(self.results, f, indent=4)
+        self.google_get_search_results(qid, final_url, content, pages_cnt, crawl_idx, results)
+        with codecs.open(os.path.join(self.output_root, 'google_%s.json' % qid), 'wb', 'utf-8') as f:
+            json.dump(results, f, indent=2)
     
         
-    def yahoo_get_search_results(self, url, content):
+    def yahoo_get_search_results(self, qid, url, content, crawl_idx, results):
         page = BeautifulSoup(content, 'lxml')
 
         if page.find('div', id='web'):
             list_results = page.find('div', id='web').find_all('li')
-            
+        
             for l in list_results:
-                if l.find('div', 'res'):
-                    #print l.find('div', 'res')
-                    if l.find('div', 'res').find('h3'):
-                        href_link = l.find('div', 'res').find('h3').a['href']
-                        if len(href_link) > 0:
-                            url = href_link
-                            if url not in self.url_list:
-                                self.url_list.append(url)
-                                if l.find('div', 'res').find('div', 'abstr'):
-                                    snippets = l.find('div', 'res').find('div', 'abstr').get_text()
-                                else:
-                                    snippets = u''
-
-                                self.results.append({'id':self.query_id+'_yahoo_'+str(self.crawl_idx), 'url':url, 'snippets':snippets})
-                
-                                self.crawl_idx += 1
-                                #print self.pages_cnt,self.max_pages
-                                if self.crawl_idx > self.results_limit:
-                                    self.crawl_idx = 1
-                                    return
+                if l.find('h3', 'title'):
+                    href_link = l.find('h3', 'title').a['href']
+                    url = href_link
+                    # if url in self.url_list:
+                    #     continue
+                    if l.find('div', 'compText'):
+                        snippets = l.find('div', 'compText').get_text()
+                    else:
+                        snippets = u''
+                    if len(url) > 0 or len(snippets) > 0:
+                        self.url_list.add(url)
+                        results.append({
+                            'id': url, 
+                            'contents': snippets
+                        })
+                        crawl_idx += 1
+                        if crawl_idx > self.results_limit:
+                            return
 
             
-            if page.find('div', id='pg'):
-                if page.find('div', id='pg').find('strong'):
-                    if page.find('div', id='pg').strong.find_next_sibling('a'):
-                        next_url = 'http://search.yahoo.com'+page.find('div', id='pg').strong.find_next_sibling('a')['href']       
+            if page.find('div', 'compPagination'):
+                if page.find('div', 'compPagination').find('strong'):
+                    if page.find('div', 'compPagination').strong.find_next_sibling('a'):
+                        next_url = page.find('div', 'compPagination').strong.find_next_sibling('a')['href']       
                         next_url, next_content = self.get_page(next_url)
                         #print next_url
-                        self.yahoo_get_search_results(next_url, next_content)
+                        self.yahoo_get_search_results(qid, next_url, next_content, crawl_idx, results)
                     else:
                         return
                         
                 
 
-    def yahoo_crawl(self):
-        self.url_base = 'http://search.yahoo.com/search?'
-        self.parameters = {}
-        self.parameters['p'] = self.query
+    def yahoo_crawl(self, qid, query_text):
+        url_base = 'http://search.yahoo.com/search?'
+        parameters = {'p': query_text}
 
-        self.crawl_idx = 1
-        self.results = []
-        self.url_list = []
-        final_url, content = self.get_page(self.url_base, self.parameters)
+        crawl_idx = 1
+        results = []
+        final_url, content = self.get_page(url_base, parameters)
         
-        #with codecs.open('./yahoo_test', 'wb', 'utf-8') as out:
-            #out.write(content)
+        # with codecs.open('yahoo_test.html', 'wb', 'utf-8') as out:
+        #    out.write(content)
         
-        print 'crawling Yahoo data...'
-        self.yahoo_get_search_results(final_url, content)
-        with codecs.open(os.path.join(self.output_root, 'yahoo.json'), 'wb', 'utf-8') as f:
-            json.dump(self.results, f, indent=4)
+        logger.info('crawling Yahoo data...')
+        self.yahoo_get_search_results(qid, final_url, content, crawl_idx, results)
+        with codecs.open(os.path.join(self.output_root, 'yahoo_%s.json' % qid), 'wb', 'utf-8') as f:
+            json.dump(results, f, indent=2)
 
 
-    def handle_bing_results(self, json_object, my_key):
-        stop = False
-        if 'd' in json_object:
-            if 'results' in json_object['d']:
-                for ele in json_object['d']['results']:
-                    if ele['Url'] not in self.url_list:
-                        self.url_list.append(ele['Url'])
-                        self.results.append({'id':self.query_id+'_bing_'+str(self.crawl_idx), 'url':ele['Url'], 'snippets':ele['Description']})
-                        self.crawl_idx += 1
-                        if self.crawl_idx > self.results_limit:
-                            stop = True
-                            break
-            if not stop:
-                if '__next' in json_object['d']:   
-                    next_url = json_object['d']['__next'].split('?')[0]+'?$format=json&'+json_object['d']['__next'].split('?')[1]
-                    bing = BingSearchAPI(my_key)
-                    json_results = bing.search_next(next_url).json()
-                    self.handle_bing_results(json_results, my_key)
+    def bing_get_search_results(self, qid, query_text, url, content, first_cnt, crawl_idx, results):
+        page = BeautifulSoup(content, 'lxml')
 
+        if page.find('ol', id='b_results'):
+            list_results = page.find('ol', id='b_results').find_all('li', 'b_algo')
+            for l in list_results:
+                if l.find('h2'):
+                    href_link = l.find('h2').a['href']
+                    url = href_link
+                    # if url in self.url_list:
+                    #     continue
+                    if l.find('div', 'b_caption') and l.find('div', 'b_caption').find('p'):
+                        snippets = l.find('div', 'b_caption').find('p').get_text()
+                    else:
+                        snippets = u''
+                    if len(url) > 0 or len(snippets) > 0:
+                        self.url_list.add(url)
+                        results.append({
+                            'id': url, 
+                            'contents': snippets
+                        })
+                        crawl_idx += 1
+                        if crawl_idx > self.results_limit:
+                            return
+            
+            url_base = 'https://www.bing.com/search'
+            first_cnt += 10
+            if first_cnt > 1000:
+                return
+            next_url, next_content = self.get_page(url_base, {'q': query_text, 'first': first_cnt})
+            #print next_url
+            self.bing_get_search_results(qid, query_text, next_url, next_content, first_cnt, crawl_idx, results)
 
-    def bing_crawl(self):
-        my_key = "xq8N3fk9oXvw86bXSdP/KSo7bfS+X0fbIKTTqkA+SDE"
-        query_string = self.query
-        bing = BingSearchAPI(my_key)
-        params = {'$top': 100,
-                  '$skip': 0}
-
-        self.crawl_idx = 1
-        self.results = []
-        self.url_list = []
-
-        print 'crawling Bing data...'
-
-        json_results = bing.search(query_string,params).json()
-        self.handle_bing_results(json_results, my_key)
-
-        with codecs.open(os.path.join(self.output_root, 'bing.json'), 'wb', 'utf-8') as f:
-            json.dump(self.results, f, indent=4)
+    def bing_crawl(self, qid, query_text):
+        url_base = 'https://www.bing.com/search?'
+        parameters = {'q': query_text}
+        crawl_idx = 1
+        first_cnt = 1
+        results = []
+        
+        final_url, content = self.get_page(url_base, parameters)
+        
+        # with codecs.open('bing_test.html', 'w', 'utf-8') as out:
+        #     out.write(content)
+        
+        logger.info('crawling Bing data...')
+        
+        self.bing_get_search_results(qid, query_text, final_url, content, first_cnt, crawl_idx, results)
+        with codecs.open(os.path.join(self.output_root, 'bing_%s.json' % qid), 'wb', 'utf-8') as f:
+            json.dump(results, f, indent=2)
 
   
-    def start_crawl(self):
-        print 'Query:' + self.query
-        self.google_crawl()
-        #self.yahoo_crawl()
-        self.bing_crawl()
+    def start_crawl(self, query):
+        logger.info(query)
+        if self.crawl_google:
+            self.google_crawl(query[0], query[1])
+        if self.crawl_yahoo:
+            self.yahoo_crawl(query[0], query[1])
+        if self.crawl_bing:
+            self.bing_crawl(query[0], query[1])
 
 
-def load_queries():
-    fn = './web_topics'
-
+def load_queries(fn='sample_topics'):
     queries_list = []
     with open(fn) as f:
         for line in f:
@@ -292,11 +248,62 @@ def load_queries():
 
     return queries_list
     
-    
-if __name__ == '__main__':
-    very_start = datetime.now()
-    queries = load_queries()
+def parse_arguments():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--topic_path', 
+        type=str, 
+        default='sample_topics',
+        required=True,
+        help='Path to the topic file. The format is "qid:topic terms" per line'
+    )
+    parser.add_argument(
+        '--crawl_google',
+        default=False,
+        required=False,
+        action='store_true',
+        help='Boolean switch to turn on Google crawler'
+    )
+    parser.add_argument(
+        '--crawl_yahoo', 
+        default=False,
+        required=False,
+        action='store_true',
+        help='Boolean switch to turn on Yahoo crawler'
+    )
+    parser.add_argument(
+        '--crawl_bing',
+        default=False,
+        required=False,
+        action='store_true',
+        help='Boolean switch to turn on Bing crawler'
+    )
+    parser.add_argument(
+        '--limit', 
+        type=int, 
+        default=100,
+        required=False,
+        help='How many search results we need'
+    )
+    parser.add_argument(
+        '--output_root', 
+        type=str, 
+        default='snippets',
+        required=False,
+        help='Output folder'
+    )
+    return parser.parse_args()
 
+if __name__ == '__main__':
+    args = parse_arguments()
+    queries = load_queries(args.topic_path)
+    crawler = snippets_crawler(
+        args.crawl_google, 
+        args.crawl_yahoo, 
+        args.crawl_bing,
+        args.limit,
+        args.output_root
+    )
     for q in queries:
-        snippets_crawler(q[0],q[1]).start_crawl()
+        crawler.start_crawl(q)
 
